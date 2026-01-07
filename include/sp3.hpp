@@ -215,20 +215,24 @@ public:
     return sp3_->peak_next_data_block(t);
   }
 
-  int goto_epoch(const dso::datetime<dso::nanoseconds> &t) noexcept {
+  [[nodiscard]]
+  int goto_epoch(const dso::datetime<dso::nanoseconds> &t, dso::datetime<dso::nanoseconds> *tprev = nullptr) noexcept {
     int error = 0, advance_er = 0;
     dso::datetime<dso::nanoseconds> ct = block_.t;
 
     if (block_.t < t) {
+      if (tprev) *tprev = ct;
       // peak next epoch from next header
       while (!advance_er && !(error = peak_next_epoch(ct))) {
         // if next epoch <  requested, read it in
         if (ct < t) {
           advance_er = advance();
+          if (tprev) *tprev = ct;
         } else {
           break;
         }
       }
+
       if (error < 0) { // EOF encountered
         return -1;
       }
