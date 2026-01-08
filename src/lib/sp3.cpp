@@ -1,13 +1,13 @@
 #include "sp3.hpp"
-#include <cstdio>
 #include <charconv>
+#include <cstdio>
 #include <stdexcept>
 #ifdef DEBUG
 #include "datetime/datetime_write.hpp"
 #include <iostream>
 #endif
 
-using dso::sp3::SatelliteId;
+using dso::sp3_details::SatelliteId;
 
 namespace {
 /* Max record characters (for a navigation data block) */
@@ -24,15 +24,16 @@ constexpr double SP3_MISSING_CLK_VALUE{999999.e0};
  *  @param[in] count Number of chars to consider
  *  @return true id substring is whitespace only, false otherwise
  */
-//bool substr_is_empty(const char *str, std::size_t count) noexcept {
-//  std::size_t idx = 0;
-//  while (idx < count && str[idx] == ' ')
-//    ++idx;
-//  return idx == count;
-//}
+// bool substr_is_empty(const char *str, std::size_t count) noexcept {
+//   std::size_t idx = 0;
+//   while (idx < count && str[idx] == ' ')
+//     ++idx;
+//   return idx == count;
+// }
 
 const char *skipws(const char *str) noexcept {
-  while (*str && *str == ' ') ++str;
+  while (*str && *str == ' ')
+    ++str;
   return str;
 }
 } /* anonymous namespace */
@@ -45,7 +46,7 @@ const char *skipws(const char *str) noexcept {
 int dso::Sp3c::resolve_epoch_line(dso::datetime<dso::nanoseconds> &t) noexcept {
   char line[MAX_RECORD_CHARS];
 
-  __istream.getline(line, MAX_RECORD_CHARS);
+  istream_.getline(line, MAX_RECORD_CHARS);
   if (line[0] != '*' || line[1] != ' ') {
     fprintf(stderr, "ERROR. Failed resolving epoch line [%s] (%s)\n", line,
             __func__);
@@ -55,24 +56,30 @@ int dso::Sp3c::resolve_epoch_line(dso::datetime<dso::nanoseconds> &t) noexcept {
   int date[5];
   int error = 0;
   const auto sz = std::strlen(line);
-  const char *s1=line+1, *s2 = line + sz;
-  for (int i=0; i<5; i++) {
+  const char *s1 = line + 1, *s2 = line + sz;
+  for (int i = 0; i < 5; i++) {
     auto res = std::from_chars(skipws(s1), s2, date[i]);
     error += (res.ec != std::errc{});
     s1 = res.ptr;
   }
 
   if (error) {
-    fprintf(stderr, "[ERROR] Failed resolving (integer) date from line: %s (traceback: %s)\n", line, __func__);
+    fprintf(stderr,
+            "[ERROR] Failed resolving (integer) date from line: %s (traceback: "
+            "%s)\n",
+            line, __func__);
     return 1;
   }
 
   double fsec;
   auto res = std::from_chars(skipws(s1), s2, fsec, std::chars_format::fixed);
   error += (res.ec != std::errc{});
-  
+
   if (error) {
-    fprintf(stderr, "[ERROR] Failed resolving (sec of) date from line: %s (traceback: %s)\n", line, __func__);
+    fprintf(stderr,
+            "[ERROR] Failed resolving (sec of) date from line: %s (traceback: "
+            "%s)\n",
+            line, __func__);
     return 1;
   }
 
@@ -85,10 +92,96 @@ int dso::Sp3c::resolve_epoch_line(dso::datetime<dso::nanoseconds> &t) noexcept {
   return 0;
 }
 
+int dso::Sp3c::get_next_block(
+    dso::sp3_details::Sp3DataBlock &datablock,
+    const dso::sp3_details::SatelliteId *sat) noexcept {
+  char line[MAX_RECORD_CHARS];
+  datablock.clear();
+
+  /* possible following lines (three first chars):
+   * 1. '*  ' i.e an epoch header
+   * 2. 'PXX' i.e. a position & clock line, e.g. 'PG01 ....'
+   * 3. 'EP ' i.e. position and clock correlation
+   * 4. 'VXX' i.e. velocity line, e.g. 'VG01 ...'
+   * 5. 'EV ' i.e. velocity correlation
+   * 6. 'EOF' i.e. EOF
+   */
+
+  /* current epoch (of block) */
+  dso::datetime<dso::nanoseconds> t;
+
+  /* get current time; if -1 is returned, we reached EOF */
+  int error = this->peak_next_data_block(t);
+  if (error)
+    return error;
+
+  // keep on reading reacords .....
+  bool keep_reading = true;
+  char c;
+  dso::sp3_details::SatelliteId satid;
+  double state[8];      /** [ X, Y, Z, clk, Vx, Vy, Vz, Vc ] */
+  double state_sdev[8]; /** following state__ */
+  dso::Sp3Flag flag;
+
+  do {
+    c = istream_.peek();
+    if (c == '*') {
+      keep_reading = false;
+      break;
+    } else if (c == 'P') {
+      /* position line; resolve it if sats match */
+      error = get_next_position(satid, state[0], state[1], state[2], state[3],
+                                state_sdev[0], state_sdev[1], state_sdev[2],
+                                state_sdev[3], flag, sat);
+      if (error > 0)
+        return error;
+      if (!error) {
+        auto it = datablock.sat_block(satid);
+        if (it == datablock.blocks_.end()) {
+          /* entry for new satellite */
+          datablock.blocks_.emplace_back(satid, flag, state, state_sdev);
+        } else {
+          it->update_position(flag, state, state_sdev);
+        }
+      }
+    } else if (c == 'V') {
+      error = get_next_velocity(satid, state[4], state[5], state[6], state[7],
+                                state_sdev[4], state_sdev[5], state_sdev[6],
+                                state_sdev[7], flag, sat);
+      if (error > 0)
+        return error;
+      if (!error) {
+        auto it = datablock.sat_block(satid);
+        if (it == datablock.blocks_.end()) {
+          /* entry for new satellite */
+          datablock.blocks_.emplace_back(satid, flag, state, state_sdev);
+        } else {
+          it->update_velocity(flag, state, state_sdev);
+        }
+      }
+    } else {
+      istream_.getline(line, MAX_RECORD_CHARS);
+      if (!std::strncmp(line, "EOF", 3)) {
+        keep_reading = false;
+        /*return -1;*/
+        error = -1;
+      } else if (!std::strncmp(line, "EP", 2)) {
+        fprintf(stderr, "[DEBUG] Ingoring Position Correlation Records ...\n");
+      } else if (!std::strncmp(line, "EV", 2)) {
+        fprintf(stderr, "[DEBUG] Ingoring Velocity Correlation Records ...\n");
+      } else {
+        return 150;
+      }
+    }
+  } while (keep_reading);
+
+  return error;
+}
+
 /** Read in and resolve an Sp3c/d Velocity and ClockRate-of-Change Record. The
  *  function expects that the next line to be read off from the input stream
  *  is a Velocity and ClockRate-of-Change Record line.
- * 
+ *
  *  @param[out] A 3character satellite id as recorded in the Sp3 file
  *  @param[out] xv  X-component of satelite velocity, in dm/sec
  *  @param[out] yv  y-component of satelite velocity, in dm/sec
@@ -118,7 +211,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
                                  const SatelliteId *wsat) noexcept {
   char line[MAX_RECORD_CHARS];
 
-  __istream.getline(line, MAX_RECORD_CHARS);
+  istream_.getline(line, MAX_RECORD_CHARS);
   if (*line != 'V')
     return 1;
 
@@ -136,9 +229,10 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
   int error = 0;
   double dvec[4];
   const auto sz = std::strlen(line);
-  const char *s1 = line+4, *s2 = line + sz;
+  const char *s1 = line + 4, *s2 = line + sz;
   for (int i = 0; i < 4; i++) {
-    auto res = std::from_chars(skipws(s1), s2, dvec[i], std::chars_format::fixed);
+    auto res =
+        std::from_chars(skipws(s1), s2, dvec[i], std::chars_format::fixed);
     error += (res.ec != std::errc{});
     s1 = res.ptr;
   }
@@ -178,7 +272,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
         errno = 0;
         return 6;
       }
-      xstdv = std::pow(fpb_pos__, nn); // 10**-4 mm/sec
+      xstdv = std::pow(fpb_pos_, nn); // 10**-4 mm/sec
       ++has_pos_stddev;
     }
     if (*(line + 64) != ' ' || *(line + 65) != ' ') {
@@ -187,7 +281,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
         errno = 0;
         return 6;
       }
-      ystdv = std::pow(fpb_pos__, nn);
+      ystdv = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
     if (*(line + 67) != ' ' || *(line + 68) != ' ') {
@@ -196,7 +290,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
         errno = 0;
         return 6;
       }
-      zstdv = std::pow(fpb_pos__, nn);
+      zstdv = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
   }
@@ -211,7 +305,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
         errno = 0;
         return 6;
       }
-      cstdv = std::pow(fpb_clk__, nn); // 10**-4 psec/sec
+      cstdv = std::pow(fpb_clk_, nn); // 10**-4 psec/sec
       ++has_clk_stddev;
     }
   }
@@ -225,7 +319,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
 /** Read in and resolve an Sp3c/d Position and Clock Record. The function
  *  expects that the next line to be read off from the input stream is a
  *  Position and Clock Record line.
- * 
+ *
  *  @param[out] A 3character satellite id as recorded in the Sp3 file
  *  @param[out] xkm X-component of satelite position, in km
  *  @param[out] ykm y-component of satelite position, in km
@@ -251,7 +345,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
                                  const SatelliteId *wsat) noexcept {
   char line[MAX_RECORD_CHARS];
 
-  __istream.getline(line, MAX_RECORD_CHARS);
+  istream_.getline(line, MAX_RECORD_CHARS);
   if (*line != 'P')
     return 1;
 
@@ -268,9 +362,10 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
   int error = 0;
   double dvec[4];
   const auto sz = std::strlen(line);
-  const char *s1 = line+4, *s2 = line + sz;
+  const char *s1 = line + 4, *s2 = line + sz;
   for (int i = 0; i < 4; i++) {
-    auto res = std::from_chars(skipws(s1), s2, dvec[i], std::chars_format::fixed);
+    auto res =
+        std::from_chars(skipws(s1), s2, dvec[i], std::chars_format::fixed);
     error += (res.ec != std::errc{});
     s1 = res.ptr;
   }
@@ -309,7 +404,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
         errno = 0;
         return 6;
       }
-      xstdv = std::pow(fpb_pos__, nn);
+      xstdv = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
     if (*(line + 64) != ' ' || *(line + 65) != ' ') {
@@ -318,7 +413,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
         errno = 0;
         return 6;
       }
-      ystdv = std::pow(fpb_pos__, nn);
+      ystdv = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
     if (*(line + 67) != ' ' || *(line + 68) != ' ') {
@@ -327,7 +422,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
         errno = 0;
         return 6;
       }
-      zstdv = std::pow(fpb_pos__, nn);
+      zstdv = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
   }
@@ -341,7 +436,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
         errno = 0;
         return 6;
       }
-      cstdv = std::pow(fpb_clk__, nn);
+      cstdv = std::pow(fpb_clk_, nn);
       ++has_clk_stddev;
     }
   }
@@ -368,12 +463,12 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
  *  @param[in] filename  The filename of the Sp3 file
  */
 dso::Sp3c::Sp3c(const char *filename)
-    : __filename(filename), __istream(filename, std::ios_base::in),
-      /*__satsys(SATELLITE_SYSTEM::mixed),*/ __end_of_head(0) {
+    : filename_(filename), istream_(filename, std::ios_base::in),
+      /*__satsys(SATELLITE_SYSTEM::mixed),*/ end_of_head_(0) {
   int j;
   if ((j = read_header())) {
-    if (__istream.is_open())
-      __istream.close();
+    if (istream_.is_open())
+      istream_.close();
     throw std::runtime_error("[ERROR] Failed to read Sp3 header; Error Code: " +
                              std::to_string(j));
   }
@@ -385,7 +480,7 @@ int dso::Sp3c::peak_next_data_block(
   char c;
   int error = 0;
 
-  if (!__istream.good())
+  if (!istream_.good())
     return 1;
 
   /* possible following lines (three first chars):
@@ -396,10 +491,10 @@ int dso::Sp3c::peak_next_data_block(
    * 5. 'EV ' i.e. velocity correlation
    * 6. 'EOF' i.e. EOF
    */
-  const auto pos = __istream.tellg();
+  const auto pos = istream_.tellg();
 
   // following line should be an epoch header or 'EOF'
-  c = __istream.peek();
+  c = istream_.peek();
   if (c == '*') {
     if ((error = resolve_epoch_line(t))) {
       fprintf(stderr,
@@ -408,115 +503,14 @@ int dso::Sp3c::peak_next_data_block(
       error += 10;
     }
   } else {
-    __istream.getline(line, MAX_RECORD_CHARS);
+    istream_.getline(line, MAX_RECORD_CHARS);
     if (!std::strncmp(line, "EOF", 3)) {
-      __istream.clear(); // clear EOF
+      istream_.clear(); // clear EOF
       error = -1;
     } else {
       error = 100;
     }
   }
 
-  __istream.seekg(pos);
-
   return error;
 }
-
-/** Read in the next data block (including the epoch header) and if it has
- *  a position and/or velocity record (lines) for the given satellite, parse
- *  and collect them in the passed in Sp3DataBlock.
- *  The function expects that the next line to be read is an Epoch Header
- *  line. It will keep on reading until the data block is over, and if it
- *  encounters data for SV satid, it will parse and store them.
- */
-int dso::Sp3c::get_next_data_block(SatelliteId satid,
-                                   Sp3DataBlock &block) noexcept {
-  char line[MAX_RECORD_CHARS];
-  char c;
-  int status;
-
-  if (!__istream.good())
-    return 1;
-
-  /* possible following lines (three first chars):
-   * 1. '*  ' i.e an epoch header
-   * 2. 'PXX' i.e. a position & clock line, e.g. 'PG01 ....'
-   * 3. 'EP ' i.e. position and clock correlation
-   * 4. 'VXX' i.e. velocity line, e.g. 'VG01 ...'
-   * 5. 'EV ' i.e. velocity correlation
-   * 6. 'EOF' i.e. EOF
-   */
-  SatelliteId csatid;
-
-  // following line should be an epoch header or 'EOF'
-  c = __istream.peek();
-  if (c == '*') {
-    if ((status = resolve_epoch_line(block.t))) {
-      fprintf(stderr,
-              "ERROR. Failed to resolve sp3 epoch line, error=%d (%s)\n",
-              status, __func__);
-      return status + 10;
-    }
-  } else {
-    __istream.getline(line, MAX_RECORD_CHARS);
-    if (!std::strncmp(line, "EOF", 3)) {
-      return -1;
-    } else {
-      return 100;
-    }
-  }
-
-  // default initialize the block flag
-  block.flag.set_defaults();
-
-  // keep on reading reacords .....
-  bool keep_reading = true;
-  do {
-    c = __istream.peek();
-    if (c == '*') {
-      keep_reading = false;
-      break;
-    } else if (c == 'P') {
-      if ((status = get_next_position(
-               satid, block.state[0], block.state[1], block.state[2],
-               block.state[3], block.state_sdev[0], block.state_sdev[1],
-               block.state_sdev[2], block.state_sdev[3], block.flag, &satid)))
-        return status + 20;
-    } else if (c == 'V') {
-      if ((status = get_next_velocity(
-               satid, block.state[4], block.state[5], block.state[6],
-               block.state[7], block.state_sdev[4], block.state_sdev[5],
-               block.state_sdev[6], block.state_sdev[7], block.flag, &satid)))
-        return status + 30;
-    } else {
-      __istream.getline(line, MAX_RECORD_CHARS);
-      if (!std::strncmp(line, "EOF", 3)) {
-        keep_reading = false;
-        /*return -1;*/
-        status = -1;
-      } else if (!std::strncmp(line, "EP", 2)) {
-        fprintf(stderr, "[DEBUG] Ingoring Position Correlation Records ...\n");
-      } else if (!std::strncmp(line, "EV", 2)) {
-        fprintf(stderr, "[DEBUG] Ingoring Velocity Correlation Records ...\n");
-      } else {
-        return 150;
-      }
-    }
-  } while (keep_reading);
-
-  return status;
-}
-
-#ifdef DEBUG
-void dso::Sp3c::print_members() const noexcept {
-  std::cout << "\nfilename     :" << __filename
-            << "\nVersion      :" << version__
-            //<< "\nStart Epoch  :" << dso::strftime_ymd_hms(start_epoch__)
-            << "\n# Epochs     :" << num_epochs__
-            << "\nCoordinate S :" << crd_sys__
-            << "\nOrbit Type   :" << orb_type__
-            << "\nAgency       :" << agency__
-            << "\nTime System  :" << time_sys__;
-            //<< "\nInterval(sec):" << interval__.to_fractional_seconds();
-}
-#endif

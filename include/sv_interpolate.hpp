@@ -28,6 +28,14 @@ constexpr int MIN_INTERPOLATION_PTS = 4;
 constexpr const dso::milliseconds three_min_in_millisec{
     (3 * 60 + 1) * dso::milliseconds::sec_factor<long>()};
 
+template <int WINDOW_SEC, int MIN_PTS> class Sp3ForwardInterpolator {
+private:
+  /** SV to interpolate */
+  sp3::SatelliteId svid;
+  /** Sp3 instance providing data values */
+  Sp3c *sp3{nullptr};
+}; /*Sp3ForwardInterpolator*/
+
 class SvInterpolator {
 private:
   /** SV to interpolate */
@@ -38,7 +46,7 @@ private:
   Sp3c *sp3{nullptr};
   /** last index of data used in the interpolation */
   int last_index{0};
-  /** interval to use in interpolation, aka use points up to max_millisec 
+  /** interval to use in interpolation, aka use points up to max_millisec
    * away from requested epoch to perform the interpolation
    */
   dso::milliseconds max_millisec{three_min_in_millisec};
@@ -52,19 +60,19 @@ private:
   double *workspace{nullptr};
 
   /** @brief Compute workspace arena size
-   * 
+   *
    * This function will compute the maximum number of data points to be used
    * in the interpolation, based on the options available (aka max_millisec)
    * and the data interval of the Sp3.
    * We are considering points up to max_millisec on the right and points
    * up to max_millisec on the left.
-   * 
+   *
    * @return Maximum number of points around a central point, with time tags
    *         less than max_millisec apart
    */
   int compute_workspace_size() noexcept;
 
-  /** Fill in the data array using an sp3 instance (aka collect SV blocks 
+  /** Fill in the data array using an sp3 instance (aka collect SV blocks
    * from Sp3)
    */
   int feed_from_sp3() noexcept;
@@ -91,7 +99,7 @@ private:
   }
 
 public:
-  SvInterpolator(sp3::SatelliteId sid) noexcept : svid(sid){};
+  SvInterpolator(sp3::SatelliteId sid) noexcept : svid(sid) {};
 
   /** Constructor from a SatelliteId and an Sp3c instance; this function
    *  will:

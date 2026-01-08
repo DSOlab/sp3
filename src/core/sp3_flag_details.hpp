@@ -1,11 +1,11 @@
 /** @file
  * Two things are defined in thsi file:
- * 1. An Sp3Event enum class, that can designate any event recorded in an 
+ * 1. An Sp3Event enum class, that can designate any event recorded in an
  *    Sp3 file
- * 2. An Sp3FlagWrapper class, that can assist the handling of multiple 
+ * 2. An Sp3FlagWrapper class, that can assist the handling of multiple
  *    Sp3Event's
- * 
- * Both of the two definitions will help in the Sp3Flag class, defined in 
+ *
+ * Both of the two definitions will help in the Sp3Flag class, defined in
  * (yet) another file.
  */
 
@@ -17,7 +17,7 @@
 
 namespace dso {
 
-namespace sp3 {
+namespace sp3_details {
 /** @brief Underlying type for Sp3Event Enum class */
 using uitype = uint_fast16_t;
 
@@ -30,12 +30,12 @@ struct Sp3FlagWrapper {
   uitype bits_{0};
 }; /* struct Sp3FlagWrapper */
 
-} /* namespace sp3 */
+} // namespace sp3_details
 
-/** @enum Sp3Event Describe an event that can be recorded in an Sp3 file. A 
+/** @enum Sp3Event Describe an event that can be recorded in an Sp3 file. A
  * record may be marked with multiple (or none) Sp3Event's.
  */
-enum class Sp3Event : sp3::uitype {
+enum class Sp3Event : sp3_details::uitype {
   /** Bad or absent positional values are to be set to 0.000000 */
   bad_abscent_position = 0,
 
@@ -51,7 +51,7 @@ enum class Sp3Event : sp3::uitype {
    * current epoch, or at the current epoch. A blank means either no event
    * occurred, or it is unknown whether any event occurred.
    */
-   clock_event,
+  clock_event,
 
   /** Column 76 is theClock Correction Prediction Flag (either 'P' or blank).
    * A 'P' flagindicates that the satellite clock correction at this epoch is
@@ -98,11 +98,11 @@ enum class Sp3Event : sp3::uitype {
   has_clk_rate_stdev
 }; /* enum (class) Sp3Event */
 
-static_assert(std::numeric_limits<sp3::uitype>::digits >
-              static_cast<sp3::uitype>(Sp3Event::has_clk_rate_stdev));
+static_assert(std::numeric_limits<sp3_details::uitype>::digits >
+              static_cast<sp3_details::uitype>(Sp3Event::has_clk_rate_stdev));
 
 /** @brief set two events (aka turn them 'on') in a Sp3FlagWrapper
- * 
+ *
  * What we want here, is a functionality of:
  * Sp3Flag flag;
  * flag.set(Sp3Event::bad_abscent_position|Sp3Event::bad_abscent_clock|
@@ -116,10 +116,10 @@ static_assert(std::numeric_limits<sp3::uitype>::digits >
  *            Everything else is set to 0. This function acts on a bit
  *            level.
  */
-sp3::Sp3FlagWrapper operator|(Sp3Event e1, Sp3Event e2) noexcept;
+sp3_details::Sp3FlagWrapper operator|(Sp3Event e1, Sp3Event e2) noexcept;
 
 /** @brief Concatenate an Sp3FlagWrapper and an Sp3Event.
- * 
+ *
  * The function will copy the input Sp3FlagWrapper and set on the
  * e2 event (aka set the e2 bit 'on').
  * What we want here, is a functionality of:
@@ -128,13 +128,14 @@ sp3::Sp3FlagWrapper operator|(Sp3Event e1, Sp3Event e2) noexcept;
  *          Sp3Event::clock_event|Sp3Event::has_clk_rate_stdev);
  * This here is the final step ....
  * @see Sp3FlagWrapper operator|(Sp3Event e1, Sp3Event e2)
- * 
+ *
  * @param[in] e1 An Sp3FlagWrapper
  * @param[in] e2 An event to turn on in the resulting Sp3FlagWrapper
  * @return an Sp3FlagWrapper with every 'on' bit of e1 turned on and
  *            the e2 bit turned on.
  */
-sp3::Sp3FlagWrapper operator|(sp3::Sp3FlagWrapper e1, Sp3Event e2) noexcept;
+sp3_details::Sp3FlagWrapper operator|(sp3_details::Sp3FlagWrapper e1,
+                                      Sp3Event e2) noexcept;
 
 } /* namespace dso */
 
