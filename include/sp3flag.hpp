@@ -15,6 +15,14 @@ struct Sp3Flag {
   /** Initialize unmarked */
   sp3_details::uitype bits_{0};
 
+  /* @brief Bitwise OR aka, any event that is ON in either this or orther
+   * instances, will be turned on.
+   */
+  Sp3Flag &operator|=(const Sp3Flag other) noexcept {
+    bits_ = bits_ | other.bits_;
+    return *this;
+  }
+
   /** @brief Mark flag with an Sp3Event (aka, set the Sp3Event)
    * @param[in] e The Sp3Event to turn on (aka set)
    */

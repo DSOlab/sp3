@@ -37,19 +37,19 @@ struct Sp3SvDataBlock {
     id_ = inid;
   }
 
-  // TODO flags should be added here NOT copyied!!!
   void update_position(Sp3Flag inflag, const double *inpos,
                        const double *inposdev) noexcept {
     std::memcpy(state, inpos, sizeof(double) * 4);
     std::memcpy(state_sdev, inposdev, sizeof(double) * 4);
-    flag = inflag;
+    /* bitwise OR, aka turn ON every event that is on currently or in inflag */
+    flag |= inflag;
   }
 
   void update_velocity(Sp3Flag inflag, const double *invel,
                        const double *inveldev) noexcept {
     std::memcpy(state + 4, invel, sizeof(double) * 4);
     std::memcpy(state_sdev + 4, inveldev, sizeof(double) * 4);
-    flag = inflag;
+    flag |= inflag;
   }
 }; /* struct Sp3SvDataBlock */
 
@@ -120,8 +120,8 @@ public:
    *          0: All ok
    *         >0: ERROR
    */
-  int get_next_data_block(sp3_details::SatelliteId satid,
-                          sp3_details::Sp3DataBlock &block) noexcept;
+  int get_next_block(sp3_details::Sp3DataBlock &block,
+                     const sp3_details::SatelliteId *satid) noexcept;
 
   /** Assuming we are in a position in the file where the next line to be read
    * is an epoch header line; resolve the date, but do not progress the
@@ -175,14 +175,12 @@ private:
 
   /** @brief Get and resolve the next Position and Clock Record */
   int get_next_position(
-      sp3_details::SatelliteId &sat, double &xkm, double &ykm, double &zkm,
-      double &clk, double &xstdv, double &ystdv, double &zstdv, double &cstdv,
+      sp3_details::SatelliteId &sat, double *pos, double *pos_stddev,
       Sp3Flag &flag, const sp3_details::SatelliteId *wsat = nullptr) noexcept;
 
   /** @brief Get and resolve the next Velocity and ClockRate-of-Change Record */
   int get_next_velocity(
-      sp3_details::SatelliteId &sat, double &xkm, double &ykm, double &zkm,
-      double &clk, double &xstdv, double &ystdv, double &zstdv, double &cstdv,
+      sp3_details::SatelliteId &sat, double *vel, double *vel_stddev,
       Sp3Flag &flag, const sp3_details::SatelliteId *wsat = nullptr) noexcept;
 
   /** The name of the file */
@@ -218,82 +216,145 @@ private:
 
   struct iterator {
     using value_type = sp3_details::Sp3DataBlock;
+    using pointer = const sp3_details::Sp3DataBlock *;
+    using reference = const sp3_details::Sp3DataBlock &;
+
+    friend class Sp3c;
+
+    /* end iterator */
+    iterator() noexcept = default;
+
+    /* iterator-like behaviour */
+    reference operator*() const noexcept { return current_; }
+    pointer operator->() const noexcept { return &current_; }
+
+    iterator &operator++() {
+      int error = sp3_->get_next_block(current_, nullptr);
+      if (error > 0) {
+        throw std::runtime_error("[ERROR] Failed advancing Sp3c::iterator!\n");
+      }
+      if (error < 0)
+        *this = iterator();
+      return *this;
+    };
+
+    iterator operator++(int) {
+      auto t = *this;
+      ++(*this);
+      return t;
+    }
+
+    /* @warning Only use to compare with end(). does not so anything
+     * usefull otherwise!
+     */
+    friend bool operator==(const iterator &a, const iterator &b) noexcept {
+      return a.sp3_ == b.sp3_;
+    }
+
+    /* @warning Only use to compare with end(). does not so anything
+     * usefull otherwise!
+     */
+    friend bool operator!=(const iterator &a, const iterator &b) noexcept {
+      return !(a == b);
+    }
+
+  private:
+    explicit iterator(Sp3c &sp3) noexcept : current_{}, sp3_(&sp3) {
+      sp3_->rewind();
+    }
+
+    value_type current_;
+    Sp3c *sp3_;
+
   }; /* class iterator */
+
+  /* lvalue-only begin/end (safe) */
+  iterator begin() & noexcept { return iterator{*this}; }
+  iterator end() & noexcept { return iterator{}; }
+
+  /* forbid begin()/end() on temporaries
+   * e.g. for (auto b : Sp3c("foo")) {}  // → dangling iterator
+   *  or  std::move(mysp3).begin();
+   */
+  iterator begin() && = delete;
+  iterator end() && = delete;
+  iterator begin() const && = delete;
+  iterator end() const && = delete;
 }; /* class Sp3c */
 
-/** Utility class, to iterate through the data blocks of an Sp3 file */
-class Sp3Iterator {
-  Sp3c *sp3_;
-  sp3::SatelliteId id_;
-  Sp3DataBlock block_;
-
-public:
-  Sp3Iterator(Sp3c &sp3) : sp3_(&sp3) {
-    sp3_->rewind();
-    if (sp3_->get_next_data_block(id_, block_)) {
-      throw std::runtime_error(
-          "ERROR Failed to create Sp3Iterator instance!\n");
-    }
-  };
-
-  const Sp3DataBlock &data_block() const noexcept { return block_; }
-
-  void begin() {
-    sp3_->rewind();
-    if (sp3_->get_next_data_block(id_, block_)) {
-      throw std::runtime_error(
-          "ERROR Failed to create Sp3Iterator instance!\n");
-    }
-    return;
-  }
-
-  int advance() noexcept { return sp3_->get_next_data_block(id_, block_); }
-
-  dso::datetime<dso::nanoseconds> current_time() const noexcept {
-    return block_.t;
-  }
-
-  int peak_next_epoch(dso::datetime<dso::nanoseconds> &t) const noexcept {
-    return sp3_->peak_next_data_block(t);
-  }
-
-  [[nodiscard]]
-  int goto_epoch(const dso::datetime<dso::nanoseconds> &t,
-                 dso::datetime<dso::nanoseconds> *tprev = nullptr) noexcept {
-    int error = 0, advance_er = 0;
-    dso::datetime<dso::nanoseconds> ct = block_.t;
-
-    if (block_.t < t) {
-      if (tprev)
-        *tprev = ct;
-      // peak next epoch from next header
-      while (!advance_er && !(error = peak_next_epoch(ct))) {
-        // if next epoch <  requested, read it in
-        if (ct < t) {
-          advance_er = advance();
-          if (tprev)
-            *tprev = ct;
-        } else {
-          break;
-        }
-      }
-
-      if (error < 0) { // EOF encountered
-        return -1;
-      }
-      if (error + advance_er)
-        return error + advance_er;
-    } else {
-      this->begin();
-      if (block_.t > t)
-        return 10;
-      return goto_epoch(t);
-    }
-
-    return error + advance_er;
-  }
-
-}; /* Sp3Iterator */
+///** Utility class, to iterate through the data blocks of an Sp3 file */
+// class Sp3Iterator {
+//   Sp3c *sp3_;
+//   sp3::SatelliteId id_;
+//   Sp3DataBlock block_;
+//
+// public:
+//   Sp3Iterator(Sp3c &sp3) : sp3_(&sp3) {
+//     sp3_->rewind();
+//     if (sp3_->get_next_data_block(id_, block_)) {
+//       throw std::runtime_error(
+//           "ERROR Failed to create Sp3Iterator instance!\n");
+//     }
+//   };
+//
+//   const Sp3DataBlock &data_block() const noexcept { return block_; }
+//
+//   void begin() {
+//     sp3_->rewind();
+//     if (sp3_->get_next_data_block(id_, block_)) {
+//       throw std::runtime_error(
+//           "ERROR Failed to create Sp3Iterator instance!\n");
+//     }
+//     return;
+//   }
+//
+//   int advance() noexcept { return sp3_->get_next_data_block(id_, block_); }
+//
+//   dso::datetime<dso::nanoseconds> current_time() const noexcept {
+//     return block_.t;
+//   }
+//
+//   int peak_next_epoch(dso::datetime<dso::nanoseconds> &t) const noexcept {
+//     return sp3_->peak_next_data_block(t);
+//   }
+//
+//   [[nodiscard]]
+//   int goto_epoch(const dso::datetime<dso::nanoseconds> &t,
+//                  dso::datetime<dso::nanoseconds> *tprev = nullptr) noexcept {
+//     int error = 0, advance_er = 0;
+//     dso::datetime<dso::nanoseconds> ct = block_.t;
+//
+//     if (block_.t < t) {
+//       if (tprev)
+//         *tprev = ct;
+//       // peak next epoch from next header
+//       while (!advance_er && !(error = peak_next_epoch(ct))) {
+//         // if next epoch <  requested, read it in
+//         if (ct < t) {
+//           advance_er = advance();
+//           if (tprev)
+//             *tprev = ct;
+//         } else {
+//           break;
+//         }
+//       }
+//
+//       if (error < 0) { // EOF encountered
+//         return -1;
+//       }
+//       if (error + advance_er)
+//         return error + advance_er;
+//     } else {
+//       this->begin();
+//       if (block_.t > t)
+//         return 10;
+//       return goto_epoch(t);
+//     }
+//
+//     return error + advance_er;
+//   }
+//
+// }; /* Sp3Iterator */
 
 } /* namespace dso */
 

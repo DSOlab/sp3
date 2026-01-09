@@ -39,6 +39,7 @@ const char *skipws(const char *str) noexcept {
 } /* anonymous namespace */
 
 /** @brief Resolve an Epoch Header Record line
+ *
  *  @param[in] line An Epoch Header Record to be resolved
  *  @param[out] t The epoch resolved from the input line
  *  @return Anything other than 0 denotes an error
@@ -115,51 +116,50 @@ int dso::Sp3c::get_next_block(
   if (error)
     return error;
 
-  // keep on reading reacords .....
+  // keep on reading records .....
   bool keep_reading = true;
   char c;
   dso::sp3_details::SatelliteId satid;
-  double state[8];      /** [ X, Y, Z, clk, Vx, Vy, Vz, Vc ] */
-  double state_sdev[8]; /** following state__ */
   dso::Sp3Flag flag;
+  double arr[8];
 
   do {
+    /* peek next line ... */
     c = istream_.peek();
     if (c == '*') {
+      /* got new date line, i.e. reached next block; stop */
       keep_reading = false;
       break;
     } else if (c == 'P') {
-      /* position line; resolve it if sats match */
-      error = get_next_position(satid, state[0], state[1], state[2], state[3],
-                                state_sdev[0], state_sdev[1], state_sdev[2],
-                                state_sdev[3], flag, sat);
+      /* consume position line; resolve it (if sats match) */
+      error = get_next_position(satid, arr, arr + 4, flag, sat);
       if (error > 0)
         return error;
       if (!error) {
         auto it = datablock.sat_block(satid);
         if (it == datablock.blocks_.end()) {
           /* entry for new satellite */
-          datablock.blocks_.emplace_back(satid, flag, state, state_sdev);
+          datablock.blocks_.emplace_back(satid, flag, arr, arr + 4);
         } else {
-          it->update_position(flag, state, state_sdev);
+          it->update_position(flag, arr, arr + 4);
         }
       }
     } else if (c == 'V') {
-      error = get_next_velocity(satid, state[4], state[5], state[6], state[7],
-                                state_sdev[4], state_sdev[5], state_sdev[6],
-                                state_sdev[7], flag, sat);
+      /* consume velocity line; resolve it (if sats match) */
+      error = get_next_velocity(satid, arr, arr + 4, flag, sat);
       if (error > 0)
         return error;
       if (!error) {
         auto it = datablock.sat_block(satid);
         if (it == datablock.blocks_.end()) {
           /* entry for new satellite */
-          datablock.blocks_.emplace_back(satid, flag, state, state_sdev);
+          datablock.blocks_.emplace_back(satid, flag, arr, arr + 4);
         } else {
-          it->update_velocity(flag, state, state_sdev);
+          it->update_velocity(flag, arr, arr + 4);
         }
       }
     } else {
+      /* consume next line and check what it is */
       istream_.getline(line, MAX_RECORD_CHARS);
       if (!std::strncmp(line, "EOF", 3)) {
         keep_reading = false;
@@ -183,14 +183,16 @@ int dso::Sp3c::get_next_block(
  *  is a Velocity and ClockRate-of-Change Record line.
  *
  *  @param[out] A 3character satellite id as recorded in the Sp3 file
- *  @param[out] xv  X-component of satelite velocity, in dm/sec
- *  @param[out] yv  y-component of satelite velocity, in dm/sec
- *  @param[out] zv  Z-component of satelite velocity, in dm/sec
- *  @param[out] cv  Clock rate-of-change in 10**-4 microseconds/second
- *  @param[out] xstdv X-component std. deviation in 10**-4 mm/sec
- *  @param[out] ystdv Y-component std. deviation in 10**-4 mm/sec
- *  @param[out] zstdv Z-component std. deviation in 10**-4 mm/sec
- *  @param[out] cstdv Clock std. deviation in 10**-4 psec/sec
+ *  @param[out] v_xyz An array of size >= 3, which at output will contain:
+ *  - xv  X-component of satelite velocity, in dm/sec
+ *  - yv  y-component of satelite velocity, in dm/sec
+ *  - zv  Z-component of satelite velocity, in dm/sec
+ *  - cv  Clock rate-of-change in 10**-4 microseconds/second
+ *  @param[out] v_xyz_std An array of size >= 3, which at output will contain:
+ *  - X-component std. deviation in 10**-4 mm/sec
+ *  - Y-component std. deviation in 10**-4 mm/sec
+ *  - Z-component std. deviation in 10**-4 mm/sec
+ *  - Clock std. deviation in 10**-4 psec/sec
  *  @param[out] flag An Sp3Flag instance denoting the status of the resolved
  *              fields. The flag is NOT reset (aka input flags will not be
  *              touched). Any flags to be added, only affect position and clock
@@ -204,10 +206,8 @@ int dso::Sp3c::get_next_block(
  *  @return Anything other than 0 denotes an error (note tha error codes must
  *          be >0 and <10)
  */
-int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
-                                 double &zv, double &cv, double &xstdv,
-                                 double &ystdv, double &zstdv, double &cstdv,
-                                 Sp3Flag &flag,
+int dso::Sp3c::get_next_velocity(SatelliteId &sat, double *v_xyzc,
+                                 double *v_xyzc_std, Sp3Flag &flag,
                                  const SatelliteId *wsat) noexcept {
   char line[MAX_RECORD_CHARS];
 
@@ -245,18 +245,18 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
     return 1;
   }
 
-  xv = dvec[0]; // dm/s
-  yv = dvec[1];
-  zv = dvec[2];
-  cv = dvec[3]; // 10**-4 microseconds/second
+  v_xyzc[0] = dvec[0]; // dm/s
+  v_xyzc[1] = dvec[1];
+  v_xyzc[2] = dvec[2];
+  v_xyzc[3] = dvec[3]; // 10**-4 microseconds/second
 
   /* check/set flags */
-  if (xv == 0e0 || (yv == 0e0 || zv == 0e0))
+  if (v_xyzc[0] == 0e0 || (v_xyzc[1] == 0e0 || v_xyzc[2] == 0e0))
     flag.set(Sp3Event::bad_abscent_velocity);
   else
     flag.clear(Sp3Event::bad_abscent_velocity);
 
-  if (cv >= SP3_MISSING_CLK_VALUE)
+  if (v_xyzc[3] >= SP3_MISSING_CLK_VALUE)
     flag.set(Sp3Event::bad_abscent_clock_rate);
   else
     flag.clear(Sp3Event::bad_abscent_clock_rate);
@@ -272,7 +272,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
         errno = 0;
         return 6;
       }
-      xstdv = std::pow(fpb_pos_, nn); // 10**-4 mm/sec
+      v_xyzc_std[0] = std::pow(fpb_pos_, nn); // 10**-4 mm/sec
       ++has_pos_stddev;
     }
     if (*(line + 64) != ' ' || *(line + 65) != ' ') {
@@ -281,7 +281,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
         errno = 0;
         return 6;
       }
-      ystdv = std::pow(fpb_pos_, nn);
+      v_xyzc_std[1] = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
     if (*(line + 67) != ' ' || *(line + 68) != ' ') {
@@ -290,7 +290,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
         errno = 0;
         return 6;
       }
-      zstdv = std::pow(fpb_pos_, nn);
+      v_xyzc_std[2] = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
   }
@@ -305,7 +305,7 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
         errno = 0;
         return 6;
       }
-      cstdv = std::pow(fpb_clk_, nn); // 10**-4 psec/sec
+      v_xyzc_std[3] = std::pow(fpb_clk_, nn); // 10**-4 psec/sec
       ++has_clk_stddev;
     }
   }
@@ -321,14 +321,16 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
  *  Position and Clock Record line.
  *
  *  @param[out] A 3character satellite id as recorded in the Sp3 file
- *  @param[out] xkm X-component of satelite position, in km
- *  @param[out] ykm y-component of satelite position, in km
- *  @param[out] zkm Z-component of satelite position, in km
- *  @param[out] clk Clock correction in microsec
- *  @param[out] xstdv X-component std. deviation in mm
- *  @param[out] ystdv Y-component std. deviation in mm
- *  @param[out] zstdv Z-component std. deviation in mm
- *  @param[out] cstdv Clock std. deviation in psec
+ *  @param[out] xyzc An array of size >= 4, which at output will contain:
+ *  - X-component of satelite position, in km
+ *  - y-component of satelite position, in km
+ *  - Z-component of satelite position, in km
+ *  - Clock correction in microsec
+ *  @param[out] xyzc_std An array of size >= 4, which at output will contain:
+ *  - X-component std. deviation in mm
+ *  - Y-component std. deviation in mm
+ *  - Z-component std. deviation in mm
+ *  - Clock std. deviation in psec
  *  @param[out] flag An Sp3Flag instance denoting the status of the resolved
  *              fields. Note that the flag will be reset at the function call
  *  @param[in] wsat If provided, then only resolve the data line if the given
@@ -338,10 +340,8 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double &xv, double &yv,
  *  @return Anything other than 0 denotes an error (note tha error codes must
  *          be >0 and <10)
  */
-int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
-                                 double &zkm, double &clk, double &xstdv,
-                                 double &ystdv, double &zstdv, double &cstdv,
-                                 Sp3Flag &flag,
+int dso::Sp3c::get_next_position(SatelliteId &sat, double *xyzc,
+                                 double *xyzc_std, Sp3Flag &flag,
                                  const SatelliteId *wsat) noexcept {
   char line[MAX_RECORD_CHARS];
 
@@ -378,17 +378,17 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
     return 1;
   }
 
-  xkm = dvec[0];
-  ykm = dvec[1];
-  zkm = dvec[2];
+  xyzc[0] = dvec[0];
+  xyzc[1] = dvec[1];
+  xyzc[2] = dvec[2];
 
-  if (xkm == 0e0 || ykm == 0e0 || zkm == 0e0)
+  if (xyzc[0] == 0e0 || xyzc[1] == 0e0 || xyzc[2] == 0e0)
     flag.set(Sp3Event::bad_abscent_position);
   else
     flag.clear(Sp3Event::bad_abscent_position);
 
-  clk = dvec[3];
-  if (clk >= SP3_MISSING_CLK_VALUE)
+  xyzc[3] = dvec[3];
+  if (xyzc[3] >= SP3_MISSING_CLK_VALUE)
     flag.set(Sp3Event::bad_abscent_clock);
   else
     flag.clear(Sp3Event::bad_abscent_clock);
@@ -404,7 +404,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
         errno = 0;
         return 6;
       }
-      xstdv = std::pow(fpb_pos_, nn);
+      xyzc_std[0] = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
     if (*(line + 64) != ' ' || *(line + 65) != ' ') {
@@ -413,7 +413,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
         errno = 0;
         return 6;
       }
-      ystdv = std::pow(fpb_pos_, nn);
+      xyzc_std[1] = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
     if (*(line + 67) != ' ' || *(line + 68) != ' ') {
@@ -422,7 +422,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
         errno = 0;
         return 6;
       }
-      zstdv = std::pow(fpb_pos_, nn);
+      xyzc_std[2] = std::pow(fpb_pos_, nn);
       ++has_pos_stddev;
     }
   }
@@ -436,7 +436,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double &xkm, double &ykm,
         errno = 0;
         return 6;
       }
-      cstdv = std::pow(fpb_clk_, nn);
+      xyzc_std[3] = std::pow(fpb_clk_, nn);
       ++has_clk_stddev;
     }
   }
