@@ -1,5 +1,9 @@
 /** @file
  * Define class to handle interaction with Sp3-C ephemerides files.
+ *
+ * References:
+ * [1] Steve Hilla, The Extended Standard Product 3 Orbit Format
+ * (SP3-c), 17 August 2010, https://files.igs.org/pub/data/format/sp3c.txt
  */
 
 #ifndef __SP3C_IGS_FILE__
@@ -19,6 +23,40 @@
 namespace dso {
 
 namespace sp3_details {
+
+/* number of chars in Sp3c mempool */
+constexpr const int MEMPOOL_SIZE_CHAR = 32;
+/* Offset in Sp3c mempool for coordinate system string */
+constexpr const int CRD_SYS_OF = 0;
+/* number of chars in coordinate system string (including null-terminating
+ * char); Example: "ITR97", format: [A5] + '\0'
+ */
+constexpr const int CRD_SYS_SZ = 6;
+/* Offset in Sp3c mempool for orbit type string */
+constexpr const int ORB_TYP_OF = CRD_SYS_SZ;
+/* number of chars in orbit type string (including null-terminating
+ * char); Example: "FIT", format: [A3] + '\0'
+ */
+constexpr const int ORB_TYP_SZ = 4;
+/* Offset in Sp3c mempool for agency string */
+constexpr const int AGENCY_OF = CRD_SYS_SZ + ORB_TYP_SZ;
+/* number of chars in agency string (including null-terminating
+ * char); Example: "_NGS", format: [A4] + '\0'
+ */
+constexpr const int AGENCY_SZ = 5;
+/* Offset in Sp3c mempool for time system string */
+constexpr const int TME_SYS_OF = CRD_SYS_SZ + ORB_TYP_SZ + AGENCY_SZ;
+/* number of chars in time system string (including null-terminating
+ * char); Example: "GPS", format: [A3] + '\0'
+ */
+constexpr const int TME_SYS_SZ = 4;
+/* the char in Sp3c mempool that holds iterators referencing the instance. */
+constexpr const int ITERATOR_REF = MEMPOOL_SIZE_CHAR - 1;
+
+/* (static checks) */
+static_assert(ITERATOR_REF < MEMPOOL_SIZE_CHAR);
+static_assert(ITERATOR_REF > TME_SYS_OF + TME_SYS_SZ);
+
 /** @class Sp3DataBlock
  * Instances of this class, hold Sp3 data records for one block (aka one
  * epoch) and one satellite.
@@ -62,9 +100,15 @@ struct Sp3DataBlock {
     blocks_.clear();
   }
 
-  auto sat_block(SatelliteId id) const noexcept {
+  std::vector<Sp3SvDataBlock>::iterator sat_block(SatelliteId id) noexcept {
     return std::find_if(
         blocks_.begin(), blocks_.end(),
+        [=](const Sp3SvDataBlock &blc) { return id == blc.id_; });
+  }
+  std::vector<Sp3SvDataBlock>::const_iterator
+  sat_block(SatelliteId id) const noexcept {
+    return std::find_if(
+        blocks_.cbegin(), blocks_.cend(),
         [=](const Sp3SvDataBlock &blc) { return id == blc.id_; });
   }
 }; /* struct Sp3DataBlock */
@@ -105,7 +149,16 @@ public:
   void rewind() noexcept { istream_.seekg(end_of_head_, std::ios::beg); }
 
   /** @brief Time System/Scale as string (as reported in the Sp3). */
-  const char *time_sys() const noexcept { return time_sys_; }
+  [[nodiscard]]
+  const char *time_sys() const noexcept {
+    return &(cmempool_[sp3_details::TME_SYS_OF]);
+  }
+
+  /** @brief Checks if this instance is used/referenced by an iterator */
+  [[nodiscard]]
+  bool referenced_by_iterator() const noexcept {
+    return cmempool_[sp3_details::ITERATOR_REF];
+  }
 
   /** @brief Read the next data block and parse holding for a given SV
    * @param[in] satid The SV to collect records for
@@ -120,6 +173,7 @@ public:
    *          0: All ok
    *         >0: ERROR
    */
+  [[nodiscard]]
   int get_next_block(sp3_details::Sp3DataBlock &block,
                      const sp3_details::SatelliteId *satid) noexcept;
 
@@ -127,6 +181,7 @@ public:
    * is an epoch header line; resolve the date, but do not progress the
    * stream position.
    */
+  [[nodiscard]]
   int peak_next_data_block(dso::datetime<dso::nanoseconds> &t) noexcept;
 
   /** @brief Check if a given SV in included in the Sp3 (i.e. is included in
@@ -168,20 +223,35 @@ public:
 
 private:
   /** @brief Read sp3c header; assign info */
+  [[nodiscard]]
   int read_header() noexcept;
 
   /** @brief Resolve an Epoch Header Record line */
+  [[nodiscard]]
   int resolve_epoch_line(dso::datetime<dso::nanoseconds> &t) noexcept;
 
   /** @brief Get and resolve the next Position and Clock Record */
+  [[nodiscard]]
   int get_next_position(
       sp3_details::SatelliteId &sat, double *pos, double *pos_stddev,
       Sp3Flag &flag, const sp3_details::SatelliteId *wsat = nullptr) noexcept;
 
   /** @brief Get and resolve the next Velocity and ClockRate-of-Change Record */
+  [[nodiscard]]
   int get_next_velocity(
       sp3_details::SatelliteId &sat, double *vel, double *vel_stddev,
       Sp3Flag &flag, const sp3_details::SatelliteId *wsat = nullptr) noexcept;
+
+  /** @brief Set the flag "used/referenced by an iterator" */
+  void referenced_by_iterator(char c) noexcept {
+    cmempool_[sp3_details::ITERATOR_REF] = c;
+  }
+
+  /** @brief Time System/Scale as string (as reported in the Sp3). */
+  char *time_sys() noexcept { return &(cmempool_[sp3_details::TME_SYS_OF]); }
+  char *crd_system() noexcept { return &(cmempool_[sp3_details::CRD_SYS_OF]); }
+  char *agency() noexcept { return &(cmempool_[sp3_details::AGENCY_OF]); }
+  char *orbit_type() noexcept { return &(cmempool_[sp3_details::ORB_TYP_OF]); }
 
   /** The name of the file */
   std::string filename_;
@@ -195,14 +265,7 @@ private:
   int num_epochs_,
       /** Number od SVs in file */
       num_sats_;
-  /** Coordinate system (last char always '\0') */
-  char crd_sys_[6] = {'\0'},
-       /** Orbit type (last char always '\0') */
-      orb_type_[4] = {'\0'},
-       /** Agency (last char always '\0') */
-      agency_[5] = {'\0'},
-       /** Time system (last char always '\0') */
-      time_sys_[4] = {'\0'};
+  char cmempool_[sp3_details::MEMPOOL_SIZE_CHAR];
   /** Epoch interval */
   dso::nanoseconds interval_;
   /** Mark the 'END OF HEADER' field */
@@ -238,12 +301,6 @@ private:
       return *this;
     };
 
-    iterator operator++(int) {
-      auto t = *this;
-      ++(*this);
-      return t;
-    }
-
     /* @warning Only use to compare with end(). does not so anything
      * usefull otherwise!
      */
@@ -258,9 +315,38 @@ private:
       return !(a == b);
     }
 
+    ~iterator() noexcept {
+      if (sp3_)
+        sp3_->referenced_by_iterator('\0');
+    }
+
   private:
     explicit iterator(Sp3c &sp3) noexcept : current_{}, sp3_(&sp3) {
+      if (sp3_->referenced_by_iterator()) {
+        throw std::runtime_error(
+            "[ERROR] Cannot construct an iterator to Sp3 instance (" +
+            sp3_->filename_ +
+            "); another "
+            "iterator already references it! (traceback: " +
+            std::string(__func__) + ")\n");
+      }
+      sp3_->referenced_by_iterator('1');
       sp3_->rewind();
+    }
+
+    iterator(const iterator &) = delete;
+    iterator &operator=(const iterator &) = delete;
+    iterator(iterator &&other) noexcept
+        : current_(other.current_), sp3_(other.sp3_) {
+      other.sp3_ = nullptr;
+    }
+    iterator &operator=(iterator &&other) {
+      sp3_->referenced_by_iterator('\0');
+      other.sp3_->referenced_by_iterator('\0');
+      current_ = other.current_;
+      sp3_ = other.sp3_;
+      sp3_->referenced_by_iterator('1');
+      return *this;
     }
 
     value_type current_;
@@ -281,80 +367,6 @@ private:
   iterator begin() const && = delete;
   iterator end() const && = delete;
 }; /* class Sp3c */
-
-///** Utility class, to iterate through the data blocks of an Sp3 file */
-// class Sp3Iterator {
-//   Sp3c *sp3_;
-//   sp3::SatelliteId id_;
-//   Sp3DataBlock block_;
-//
-// public:
-//   Sp3Iterator(Sp3c &sp3) : sp3_(&sp3) {
-//     sp3_->rewind();
-//     if (sp3_->get_next_data_block(id_, block_)) {
-//       throw std::runtime_error(
-//           "ERROR Failed to create Sp3Iterator instance!\n");
-//     }
-//   };
-//
-//   const Sp3DataBlock &data_block() const noexcept { return block_; }
-//
-//   void begin() {
-//     sp3_->rewind();
-//     if (sp3_->get_next_data_block(id_, block_)) {
-//       throw std::runtime_error(
-//           "ERROR Failed to create Sp3Iterator instance!\n");
-//     }
-//     return;
-//   }
-//
-//   int advance() noexcept { return sp3_->get_next_data_block(id_, block_); }
-//
-//   dso::datetime<dso::nanoseconds> current_time() const noexcept {
-//     return block_.t;
-//   }
-//
-//   int peak_next_epoch(dso::datetime<dso::nanoseconds> &t) const noexcept {
-//     return sp3_->peak_next_data_block(t);
-//   }
-//
-//   [[nodiscard]]
-//   int goto_epoch(const dso::datetime<dso::nanoseconds> &t,
-//                  dso::datetime<dso::nanoseconds> *tprev = nullptr) noexcept {
-//     int error = 0, advance_er = 0;
-//     dso::datetime<dso::nanoseconds> ct = block_.t;
-//
-//     if (block_.t < t) {
-//       if (tprev)
-//         *tprev = ct;
-//       // peak next epoch from next header
-//       while (!advance_er && !(error = peak_next_epoch(ct))) {
-//         // if next epoch <  requested, read it in
-//         if (ct < t) {
-//           advance_er = advance();
-//           if (tprev)
-//             *tprev = ct;
-//         } else {
-//           break;
-//         }
-//       }
-//
-//       if (error < 0) { // EOF encountered
-//         return -1;
-//       }
-//       if (error + advance_er)
-//         return error + advance_er;
-//     } else {
-//       this->begin();
-//       if (block_.t > t)
-//         return 10;
-//       return goto_epoch(t);
-//     }
-//
-//     return error + advance_er;
-//   }
-//
-// }; /* Sp3Iterator */
 
 } /* namespace dso */
 

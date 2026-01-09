@@ -63,9 +63,9 @@ int dso::Sp3c::read_header() noexcept {
     errno = 0;
     return 16;
   }
-  std::memcpy(crd_sys_, line + 46, 5);
-  std::memcpy(orb_type_, line + 52, 3);
-  std::memcpy(agency_, line + 56, 4);
+  std::memcpy(crd_system(), line + 46, sp3_details::CRD_SYS_SZ);
+  std::memcpy(orbit_type(), line + 52, sp3_details::ORB_TYP_SZ);
+  std::memcpy(agency(), line + 56, sp3_details::ORB_TYP_SZ);
 
   // all done for first line, construct the reference date
   start_epoch_ = dso::datetime<dso::nanoseconds>(
@@ -175,7 +175,7 @@ int dso::Sp3c::read_header() noexcept {
   if (*line != '%' || line[1] != 'c')
     return 50;
   /*time_sys__ = std::string(line + 9, 3);*/
-  std::memcpy(time_sys_, line + 9, 3);
+  std::memcpy(time_sys(), line + 9, sp3_details::TME_SYS_SZ);
   istream_.getline(line, MAX_HEADER_CHARS);
   if (*line != '%' || line[1] != 'c')
     return 51;

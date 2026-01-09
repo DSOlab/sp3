@@ -464,7 +464,7 @@ int dso::Sp3c::get_next_position(SatelliteId &sat, double *xyzc,
  */
 dso::Sp3c::Sp3c(const char *filename)
     : filename_(filename), istream_(filename, std::ios_base::in),
-      /*__satsys(SATELLITE_SYSTEM::mixed),*/ end_of_head_(0) {
+      end_of_head_(0) {
   int j;
   if ((j = read_header())) {
     if (istream_.is_open())
@@ -472,6 +472,7 @@ dso::Sp3c::Sp3c(const char *filename)
     throw std::runtime_error("[ERROR] Failed to read Sp3 header; Error Code: " +
                              std::to_string(j));
   }
+  std::memset(cmempool_, '\0', sp3_details::MEMPOOL_SIZE_CHAR);
 }
 
 int dso::Sp3c::peak_next_data_block(
