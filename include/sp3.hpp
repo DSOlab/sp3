@@ -67,6 +67,8 @@ struct Sp3SvDataBlock {
   double state[8];      /** [ X, Y, Z, clk, Vx, Vy, Vz, Vc ] */
   double state_sdev[8]; /** following state__ */
 
+  Sp3SvDataBlock() : flag(), id_() {};
+
   Sp3SvDataBlock(SatelliteId inid, Sp3Flag inflag, const double *instate,
                  const double *instatedev) noexcept {
     std::memcpy(state, instate, sizeof(double) * 8);
@@ -179,13 +181,6 @@ public:
   int get_next_block(sp3_details::Sp3DataBlock &block,
                      const sp3_details::SatelliteId *satid) noexcept;
 
-  /** Assuming we are in a position in the file where the next line to be read
-   * is an epoch header line; resolve the date, but do not progress the
-   * stream position.
-   */
-  [[nodiscard]]
-  int peak_next_data_block(dso::datetime<dso::nanoseconds> &t) noexcept;
-
   /** @brief Check if a given SV in included in the Sp3 (i.e. is included in
    *        the instance's sat_vec__ member).
    *
@@ -230,19 +225,22 @@ private:
 
   /** @brief Resolve an Epoch Header Record line */
   [[nodiscard]]
-  int resolve_epoch_line(dso::datetime<dso::nanoseconds> &t) noexcept;
+  int resolve_epoch_line(const char *line,
+                         dso::datetime<dso::nanoseconds> &t) noexcept;
 
   /** @brief Get and resolve the next Position and Clock Record */
   [[nodiscard]]
   int get_next_position(
-      sp3_details::SatelliteId &sat, double *pos, double *pos_stddev,
-      Sp3Flag &flag, const sp3_details::SatelliteId *wsat = nullptr) noexcept;
+      const char *line, sp3_details::SatelliteId &sat, double *pos,
+      double *pos_stddev, Sp3Flag &flag,
+      const sp3_details::SatelliteId *wsat = nullptr) noexcept;
 
   /** @brief Get and resolve the next Velocity and ClockRate-of-Change Record */
   [[nodiscard]]
   int get_next_velocity(
-      sp3_details::SatelliteId &sat, double *vel, double *vel_stddev,
-      Sp3Flag &flag, const sp3_details::SatelliteId *wsat = nullptr) noexcept;
+      const char *line, sp3_details::SatelliteId &sat, double *vel,
+      double *vel_stddev, Sp3Flag &flag,
+      const sp3_details::SatelliteId *wsat = nullptr) noexcept;
 
   /** @brief Set the flag "used/referenced by an iterator" */
   void referenced_by_iterator(char c) noexcept {
@@ -294,14 +292,20 @@ private:
     pointer operator->() const noexcept { return &current_; }
 
     iterator &operator++() {
+      printf("[debug] calling operator++() ...\n");
+      if (!sp3_)
+        return *this;
       int error = sp3_->get_next_block(current_, nullptr);
-      if (error > 0) {
-        throw std::runtime_error("[ERROR] Failed advancing Sp3c::iterator!\n");
+      printf("[debug] operator++(): get_next_block return %d...\n", error);
+      if (error) {
+        sp3_->referenced_by_iterator('\0');
+        sp3_ = nullptr;
+        if (error > 0)
+          throw std::runtime_error(
+              "[ERROR] Failed advancing Sp3c::iterator!\n");
       }
-      if (error < 0)
-        *this = iterator();
       return *this;
-    };
+    }
 
     /* @warning Only use to compare with end(). does not so anything
      * usefull otherwise!
@@ -323,7 +327,8 @@ private:
     }
 
   private:
-    explicit iterator(Sp3c &sp3) noexcept : current_{}, sp3_(&sp3) {
+    explicit iterator(Sp3c &sp3) : current_{}, sp3_(&sp3) {
+      printf("[debug] creating new Sp3::iterator instance ...\n");
       if (sp3_->referenced_by_iterator()) {
         throw std::runtime_error(
             "[ERROR] Cannot construct an iterator to Sp3 instance (" +
@@ -332,8 +337,11 @@ private:
             "iterator already references it! (traceback: " +
             std::string(__func__) + ")\n");
       }
+      /* Make begin() valid by reading the first block now */
       sp3_->referenced_by_iterator('1');
       sp3_->rewind();
+      this->operator++();
+      printf("[debug] all done creating instance ...\n");
     }
 
     iterator(const iterator &) = delete;
@@ -343,11 +351,15 @@ private:
       other.sp3_ = nullptr;
     }
     iterator &operator=(iterator &&other) {
-      sp3_->referenced_by_iterator('\0');
-      other.sp3_->referenced_by_iterator('\0');
+      if (sp3_)
+        sp3_->referenced_by_iterator('\0');
+      if (other.sp3_) {
+        sp3_ = other.sp3_;
+        sp3_->referenced_by_iterator('1');
+      } else {
+        sp3_ = nullptr;
+      }
       current_ = other.current_;
-      sp3_ = other.sp3_;
-      sp3_->referenced_by_iterator('1');
       return *this;
     }
 
@@ -356,6 +368,7 @@ private:
 
   }; /* class iterator */
 
+public:
   /* lvalue-only begin/end (safe) */
   iterator begin() & noexcept { return iterator{*this}; }
   iterator end() & noexcept { return iterator{}; }

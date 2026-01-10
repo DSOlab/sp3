@@ -1,10 +1,16 @@
+#include "datetime/datetime_write.hpp"
 #include "sp3.hpp"
-// #include <bits/c++config.h>
 #include <cstdio>
 #include <stdexcept>
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+#include <cassert>
 
 using namespace dso;
-using dso::sp3::SatelliteId;
+using dso::sp3_details::SatelliteId;
+using dso::sp3_details::Sp3DataBlock;
+using dso::sp3_details::Sp3SvDataBlock;
 
 int main(int argc, char *argv[]) {
   if (argc != 2) {
@@ -13,46 +19,45 @@ int main(int argc, char *argv[]) {
   }
 
   try {
-  Sp3c sp3(argv[1]);
-  #ifdef DEBUG
-  sp3.print_members();
-  #endif
+    Sp3c sp3(argv[1]);
 
-  SatelliteId sv("L27");
-  Sp3DataBlock block;
+    SatelliteId sv("L27");
+    Sp3DataBlock block;
 
-
-  if (sp3.num_sats() == 1) {
-    printf("Sp3 file only includes one satellite; extracting records for %s\n", sp3.sattellite_vector()[0].id);
-    sv.set_id(sp3.sattellite_vector()[0].id);
-  } else if (!sp3.has_sv(sv)) {
-    printf("Satellite %s not included in sp3 file\n", sv.id);
-    return 0;
-  }
-
-  // let's try reading the records; note that -1 denotes EOF
-  int j;
-  std::size_t rec_count = 0;
-  do {
-    j = sp3.get_next_data_block(sv, block);
-    if (j > 0) {
-      printf("Something went wrong ....status = %3d\n", j);
-      return 1;
-    } else if (j == -1) {
-      printf("EOF encountered; Sp3 file read through!\n");
+    if (sp3.num_sats() == 1) {
+      printf(
+          "Sp3 file only includes one satellite; extracting records for %s\n",
+          sp3.sattellite_vector()[0].id);
+      sv.set_id(sp3.sattellite_vector()[0].id);
+    } else if (!sp3.has_sv(sv)) {
+      printf("Satellite %s not included in sp3 file\n", sv.id);
+      return 0;
     }
-    bool position_ok = !block.flag.is_set(Sp3Event::bad_abscent_position);
-    if (position_ok)
-      printf("%15.6f %15.7f %15.7f %15.7f\n",
-             block.t.imjd().as_underlying_type() +
-                 block.t.fractional_days().days(),
-             block.state[0], block.state[1], block.state[2]);
-    ++rec_count;
-  } while (!j);
 
-  printf("Num of records read: %6lu\n", rec_count);
+    // let's try reading the records; note that -1 denotes EOF
+    std::size_t rec_count = 0;
+    char buf[64];
+    for (auto it = sp3.begin(); it != sp3.end(); ++it) {
+      /* get the Sp3SvDataBlock for the satellite (svb) */
+      auto svb = it->sat_block(sv);
+      if (svb == it->blocks_.end()) {
+        fprintf(stderr, "Error. Failed to  find entry for satellite at %s\n",
+                to_char<YMDFormat::YYYYMMDD, HMSFormat::HHMMSSF>(it->t(), buf));
+        return 5;
+      }
+      printf("%s %14.6f %14.6f %14.6f %14.6f %14.6f %14.6f %14.6f %14.6f\n",
+             to_char<YMDFormat::YYYYMMDD, HMSFormat::HHMMSSF>(it->t(), buf),
+             svb->state[0], svb->state[1], svb->state[2], svb->state[3],
+             svb->state[4], svb->state[5], svb->state[6], svb->state[7]);
+      ++rec_count;
+    }
+
+    printf("Num of records read: %6lu\n", rec_count);
   } catch (std::exception &e) {
-    fprintf(stderr, "[ERROR] Exception thrown; probably no info, but here is what: %s (traceback: %s)\n", e.what(), __func__);
+    fprintf(stderr,
+            "[ERROR] Exception thrown; probably no info, but here is what: %s "
+            "(traceback: %s)\n",
+            e.what(), __func__);
     return 3;
   }
 

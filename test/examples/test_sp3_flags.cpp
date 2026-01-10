@@ -1,6 +1,9 @@
 #include "sp3.hpp"
-#include <cassert>
 #include <cstdio>
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+#include <cassert>
 
 using namespace dso;
 

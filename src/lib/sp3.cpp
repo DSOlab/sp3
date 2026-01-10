@@ -44,10 +44,9 @@ const char *skipws(const char *str) noexcept {
  *  @param[out] t The epoch resolved from the input line
  *  @return Anything other than 0 denotes an error
  */
-int dso::Sp3c::resolve_epoch_line(dso::datetime<dso::nanoseconds> &t) noexcept {
-  char line[MAX_RECORD_CHARS];
+int dso::Sp3c::resolve_epoch_line(const char *line,
+                                  dso::datetime<dso::nanoseconds> &t) noexcept {
 
-  istream_.getline(line, MAX_RECORD_CHARS);
   if (line[0] != '*' || line[1] != ' ') {
     fprintf(stderr, "ERROR. Failed resolving epoch line [%s] (%s)\n", line,
             __func__);
@@ -108,33 +107,38 @@ int dso::Sp3c::get_next_block(
    * 6. 'EOF' i.e. EOF
    */
 
+  /* check the stream; baybe EOF is already set by the previous call to the
+   * function */
+  if (!istream_) {
+    if (istream_.eof())
+      return -1;
+    return 1;
+  }
+
+  /* get the next line (should be start of block) */
+  istream_.getline(line, MAX_RECORD_CHARS);
+
   /* current epoch (of block) */
   dso::datetime<dso::nanoseconds> t;
-
-  /* get current time; if -1 is returned, we reached EOF */
-  int error = this->peak_next_data_block(t);
-  if (error)
-    return error;
+  if (resolve_epoch_line(line, t)) {
+    fprintf(stderr,
+            "[ERROR] Failed resolving Sp3 start-of-block line: \"%s\"; "
+            "(traceback: %s)\n",
+            line, __func__);
+    return 1;
+  }
 
   // keep on reading records .....
-  bool keep_reading = true;
-  char c;
   dso::sp3_details::SatelliteId satid;
   dso::Sp3Flag flag;
   double arr[8];
+  int error = 0;
 
-  do {
-    /* peek next line ... */
-    c = istream_.peek();
-    if (c == '*') {
-      /* got new date line, i.e. reached next block; stop */
-      keep_reading = false;
-      break;
-    } else if (c == 'P') {
+  while (istream_.getline(line, MAX_RECORD_CHARS) && (!error)) {
+    /* position line */
+    if (line[0] == 'P') {
       /* consume position line; resolve it (if sats match) */
-      error = get_next_position(satid, arr, arr + 4, flag, sat);
-      if (error > 0)
-        return error;
+      error = get_next_position(line, satid, arr, arr + 4, flag, sat);
       if (!error) {
         auto it = datablock.sat_block(satid);
         if (it == datablock.blocks_.end()) {
@@ -143,12 +147,10 @@ int dso::Sp3c::get_next_block(
         } else {
           it->update_position(flag, arr, arr + 4);
         }
+        datablock.t_ = t;
       }
-    } else if (c == 'V') {
-      /* consume velocity line; resolve it (if sats match) */
-      error = get_next_velocity(satid, arr, arr + 4, flag, sat);
-      if (error > 0)
-        return error;
+    } else if (line[0] == 'V') {
+      error = get_next_velocity(line, satid, arr, arr + 4, flag, sat);
       if (!error) {
         auto it = datablock.sat_block(satid);
         if (it == datablock.blocks_.end()) {
@@ -157,23 +159,29 @@ int dso::Sp3c::get_next_block(
         } else {
           it->update_velocity(flag, arr, arr + 4);
         }
+        datablock.t_ = t;
       }
-    } else {
-      /* consume next line and check what it is */
+    } else if (!std::strncmp(line, "EP", 2)) {
+      fprintf(stderr, "[DEBUG] Ingoring Position Correlation Records ...\n");
+    } else if (!std::strncmp(line, "EV", 2)) {
+      fprintf(stderr, "[DEBUG] Ingoring Velocity Correlation Records ...\n");
+    } else if (!std::strncmp(line, "EOF", 3)) {
+      /* Note! we are reading one more line here (actually holds nothing) so
+       * that the isteram_ will be set to eof; then just break. Next time the
+       * function is called, it will see that the stream is on eof state and
+       * return -1. */
       istream_.getline(line, MAX_RECORD_CHARS);
-      if (!std::strncmp(line, "EOF", 3)) {
-        keep_reading = false;
-        /*return -1;*/
-        error = -1;
-      } else if (!std::strncmp(line, "EP", 2)) {
-        fprintf(stderr, "[DEBUG] Ingoring Position Correlation Records ...\n");
-      } else if (!std::strncmp(line, "EV", 2)) {
-        fprintf(stderr, "[DEBUG] Ingoring Velocity Correlation Records ...\n");
-      } else {
-        return 150;
-      }
+      break;
+    } else {
+      return 150;
     }
-  } while (keep_reading);
+    /* check first char of next line */
+    char c = istream_.peek();
+    if (c == '*') {
+      /* got new date line, i.e. reached next block; stop */
+      break;
+    }
+  }
 
   return error;
 }
@@ -195,8 +203,8 @@ int dso::Sp3c::get_next_block(
  *  - Clock std. deviation in 10**-4 psec/sec
  *  @param[out] flag An Sp3Flag instance denoting the status of the resolved
  *              fields. The flag is NOT reset (aka input flags will not be
- *              touched). Any flags to be added, only affect position and clock
- *              rate-of-change records (aka bad_abscent_velocity,
+ *              touched). Any flags to be added, only affect position and
+ * clock rate-of-change records (aka bad_abscent_velocity,
  *              bad_abscent_clock_rate, has_vel_stddev, has_clk_rate_stdev).
  *  @param[in] wsat If provided, then only resolve the data line if the given
  *              SatelliteId wsat matches the one recorded in the line. If the
@@ -206,12 +214,10 @@ int dso::Sp3c::get_next_block(
  *  @return Anything other than 0 denotes an error (note tha error codes must
  *          be >0 and <10)
  */
-int dso::Sp3c::get_next_velocity(SatelliteId &sat, double *v_xyzc,
-                                 double *v_xyzc_std, Sp3Flag &flag,
+int dso::Sp3c::get_next_velocity(const char *line, SatelliteId &sat,
+                                 double *v_xyzc, double *v_xyzc_std,
+                                 Sp3Flag &flag,
                                  const SatelliteId *wsat) noexcept {
-  char line[MAX_RECORD_CHARS];
-
-  istream_.getline(line, MAX_RECORD_CHARS);
   if (*line != 'V')
     return 1;
 
@@ -340,12 +346,9 @@ int dso::Sp3c::get_next_velocity(SatelliteId &sat, double *v_xyzc,
  *  @return Anything other than 0 denotes an error (note tha error codes must
  *          be >0 and <10)
  */
-int dso::Sp3c::get_next_position(SatelliteId &sat, double *xyzc,
-                                 double *xyzc_std, Sp3Flag &flag,
+int dso::Sp3c::get_next_position(const char *line, SatelliteId &sat,
+                                 double *xyzc, double *xyzc_std, Sp3Flag &flag,
                                  const SatelliteId *wsat) noexcept {
-  char line[MAX_RECORD_CHARS];
-
-  istream_.getline(line, MAX_RECORD_CHARS);
   if (*line != 'P')
     return 1;
 
@@ -473,45 +476,4 @@ dso::Sp3c::Sp3c(const char *filename)
                              std::to_string(j));
   }
   std::memset(cmempool_, '\0', sp3_details::MEMPOOL_SIZE_CHAR);
-}
-
-int dso::Sp3c::peak_next_data_block(
-    dso::datetime<dso::nanoseconds> &t) noexcept {
-  char line[MAX_RECORD_CHARS];
-  char c;
-  int error = 0;
-
-  if (!istream_.good())
-    return 1;
-
-  /* possible following lines (three first chars):
-   * 1. '*  ' i.e an epoch header
-   * 2. 'PXX' i.e. a position & clock line, e.g. 'PG01 ....'
-   * 3. 'EP ' i.e. position and clock correlation
-   * 4. 'VXX' i.e. velocity line, e.g. 'VG01 ...'
-   * 5. 'EV ' i.e. velocity correlation
-   * 6. 'EOF' i.e. EOF
-   */
-  const auto pos = istream_.tellg();
-
-  // following line should be an epoch header or 'EOF'
-  c = istream_.peek();
-  if (c == '*') {
-    if ((error = resolve_epoch_line(t))) {
-      fprintf(stderr,
-              "ERROR. Failed to resolve sp3 epoch line, error=%d (%s)\n", error,
-              __func__);
-      error += 10;
-    }
-  } else {
-    istream_.getline(line, MAX_RECORD_CHARS);
-    if (!std::strncmp(line, "EOF", 3)) {
-      istream_.clear(); // clear EOF
-      error = -1;
-    } else {
-      error = 100;
-    }
-  }
-
-  return error;
 }

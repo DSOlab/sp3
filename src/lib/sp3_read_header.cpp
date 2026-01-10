@@ -159,10 +159,10 @@ int dso::Sp3c::read_header() noexcept {
     return 40;
   }
   while (++dummy_it < MAX_HEADER_LINES && !std::strncmp(line, "++", 2)) {
-    istream_.getline(line, MAX_HEADER_CHARS);
     char c = istream_.peek();
     if (c != '+')
       break;
+    istream_.getline(line, MAX_HEADER_CHARS);
   }
   if (dummy_it >= MAX_HEADER_LINES) {
     return 41;

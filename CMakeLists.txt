@@ -64,11 +64,6 @@ PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/>
   # Public headers during install time
   $<INSTALL_INTERFACE:include/sp3>
-PRIVATE
-  # Private/internal headers only during build time (src/)
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-  # Internal/private headers during install time (from include/sp3/core)
-  $<INSTALL_INTERFACE:include/sp3/core>
 )
 
 # library source code

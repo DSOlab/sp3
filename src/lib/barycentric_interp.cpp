@@ -1,6 +1,8 @@
 #include "sv_interpolate.hpp"
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <limits>
 
 /** @brief Barycentric interpolation algorithm
  *
@@ -32,21 +34,28 @@ int dso::barycentric_interpolation(const dso::datetime<dso::nanoseconds> &t,
                                    const dso::sp3_details::Sp3SvDataBlock *yarr,
                                    int npts, double *cws) noexcept {
 
-  /* If x (aka t here) coincides with a node, return exact value
+  /* If x (aka t here) coincides with a node within 1e-8[sec] which is the
+   * accuracy provided in sp3 files, return exact value
    */
-  const double eps = std::numeric_limits<double>::epsilon();
+  const double eps = 1e-8; //[sec]
   for (int j = 0; j < npts; ++j) {
     double dx = t.diff<dso::DateTimeDifferenceType::FractionalSeconds>(tarr[j])
                     .seconds();
     if (std::abs(dx) <= eps) {
-      y = ty[j];
+      y = yarr[j];
       return 0;
     }
   }
 
   /* Allocate workspace if needed */
+  bool dealoc = false;
   double *c;
-  c = (cws == nullptr) ? new double[npts] : cws;
+  if (cws == nullptr) {
+    c = new double[npts];
+    dealoc = true;
+  } else {
+    c = cws;
+  }
 
   /* compute w[0] to w[mm-1] (common for all components) */
   double *__restrict__ w = c;
@@ -72,7 +81,7 @@ int dso::barycentric_interpolation(const dso::datetime<dso::nanoseconds> &t,
   std::memset(y.state_sdev, 0, sizeof(double) * 8);
 
   /* barycentric formula */
-  double A = 0e0, B = 0e0;
+  double B = 0e0;
   for (int j = 0; j < npts; j++) {
     const double h =
         t.diff<dso::DateTimeDifferenceType::FractionalSeconds>(tarr[j])
@@ -89,6 +98,10 @@ int dso::barycentric_interpolation(const dso::datetime<dso::nanoseconds> &t,
   for (int si = 0; si < 8; si++) {
     y.state[si] /= B;
   }
+
+  /* free workspace if needed */
+  if (dealoc)
+    delete[] c;
 
   return 0;
 }
