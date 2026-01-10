@@ -100,6 +100,8 @@ struct Sp3DataBlock {
     blocks_.clear();
   }
 
+  const dso::datetime<dso::nanoseconds> &t() const noexcept { return t_; }
+
   std::vector<Sp3SvDataBlock>::iterator sat_block(SatelliteId id) noexcept {
     return std::find_if(
         blocks_.begin(), blocks_.end(),
