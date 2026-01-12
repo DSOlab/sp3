@@ -3,7 +3,7 @@
 set(EXAMPLE_SOURCES
   test_sp3_flags.cpp
   test_sp3_read.cpp
-  #test_sv_interpolation.cpp
+  test_sp3_interpolate.cpp
 )
 
 # Process each source file and create an executable

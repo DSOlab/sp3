@@ -48,7 +48,6 @@ private:
     return 2 * wnpts;
   }
 
-  [[nodiscard]]
   int allocate() noexcept {
     const auto N = buffer_pts_;
     data_ = new sp3_details::Sp3SvDataBlock[N];
@@ -157,6 +156,7 @@ private:
     case HUNT_DIRECTION::ERROR:
       return 1;
     }
+    return 100;
   }
 
 public:
