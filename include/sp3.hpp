@@ -344,6 +344,15 @@ private:
       this->operator++();
     }
 
+    int try_rewind() noexcept {
+      if (sp3_) {
+        sp3_->rewind();
+        this->operator++();
+        return true;
+      }
+      return false;
+    }
+
     iterator(const iterator &) = delete;
     iterator &operator=(const iterator &) = delete;
     iterator(iterator &&other) noexcept

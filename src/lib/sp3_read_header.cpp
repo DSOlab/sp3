@@ -1,4 +1,5 @@
 #include "sp3.hpp"
+#include <charconv>
 #include <cstdio>
 
 /// No header line can have more than 80 chars. However, there are cases when
@@ -100,9 +101,26 @@ int dso::Sp3c::read_header() noexcept {
             __func__);
     return 22;
   }
-  sec = std::strtod(line + 24, &str_end);
-  interval_ = dso::nanoseconds(
-      static_cast<long>(sec * dso::nanoseconds::sec_factor<double>()));
+  // sec = std::strtod(line + 24, &str_end);
+  // interval_ = dso::nanoseconds(
+  //     static_cast<long>(sec * dso::nanoseconds::sec_factor<double>()));
+  auto skipws = [](const char *s) {
+    while (*s && std::isspace(static_cast<unsigned char>(*s)))
+      ++s;
+    return s;
+  };
+  auto res = std::from_chars(skipws(line + 24), line + 24 + 14, sec);
+  if (res.ec != std::errc{}) {
+    fprintf(
+        stderr,
+        "[ERROR] Failed parsing sp3 interval in line two! (traceback: %s)\n",
+        __func__);
+    return 5;
+  }
+  interval_ = dso::nanoseconds(static_cast<long>(sec * 1e9));
+  printf("%s -> intrval in nanosec = %ld\n", __func__,
+         interval_.as_underlying_type());
+
   int mjd = std::strtol(line + 39, &str_end, 10);
   if (!mjd || errno == ERANGE) {
     errno = 0;

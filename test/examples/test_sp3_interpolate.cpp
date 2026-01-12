@@ -19,16 +19,19 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  Sp3c sp3(argv[1]);
-
   SatelliteId sv("L27");
-  if (sp3.num_sats() == 1) {
-    printf("Sp3 file only includes one satellite; extracting records for %s\n",
-           sp3.sattellite_vector()[0].id);
-    sv.set_id(sp3.sattellite_vector()[0].id);
-  } else if (!sp3.has_sv(sv)) {
-    printf("Satellite %s not included in sp3 file\n", sv.id);
-    return 0;
+  {
+    Sp3c sp3(argv[1]);
+
+    if (sp3.num_sats() == 1) {
+      printf(
+          "Sp3 file only includes one satellite; extracting records for %s\n",
+          sp3.sattellite_vector()[0].id);
+      sv.set_id(sp3.sattellite_vector()[0].id);
+    } else if (!sp3.has_sv(sv)) {
+      printf("Satellite %s not included in sp3 file\n", sv.id);
+      return 0;
+    }
   }
 
   Sp3ForwardInterpolator<310, 10> intp(argv[1], sv);

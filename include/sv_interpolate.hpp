@@ -38,7 +38,8 @@ private:
   /* left shift and return the index (in t_ and data_) that now contains junk
    * and the entry should be added at.*/
   int left_shift(int nplaces = 1) noexcept {
-    const int k = buffer_pts_ - nplaces;
+    const int k = pts_ - nplaces;
+    assert(k >= 0 && k < buffer_pts_);
     /* left shift data nplaces places, so that data_[nplaces] becomes data_[0]
      */
     std::memmove(data_, data_ + nplaces, k * sizeof(*data_));
@@ -49,11 +50,13 @@ private:
   std::size_t buffer_pts() const noexcept {
     const int interval = sp3_->interval().as_underlying_type();
     std::size_t wnpts = WINDOW_SEC / interval + 1;
+    printf("Calling buffer_pts() = %d / %d + 1\n", WINDOW_SEC, interval);
     return 2 * wnpts;
   }
 
   int allocate() noexcept {
-    const auto N = buffer_pts_;
+    const auto N = buffer_pts();
+    printf("Allocating %ld entries at startup\n", N);
     data_ = new sp3_details::Sp3SvDataBlock[N];
     t_ = new dso::datetime<dso::nanoseconds>[N];
     return (data_ != nullptr && t_ != nullptr);
@@ -66,30 +69,41 @@ private:
     if (t_[0] > t) {
       /* the data we have do not match, we should be searching for previous data
        */
+      if (sp3_->start_epoch() > t)
+        return HUNT_DIRECTION::ERROR;
       return HUNT_DIRECTION::BACK;
     }
     if (t_[0] < t) {
-      /* subtract one 'interval' from the begining epoch; if we are now outside
-       * the range, then this means that there are now previous data that we
-       * need to collect. if not, then we should move backwards. */
-      auto tleft = t_[0].add_seconds<dso::nanoseconds>(
-          dso::nanoseconds(sp3_->interval().as_underlying_type() * -1));
+      printf("t_[0] < t [1]");
+      /* subtract one 'interval' from the begining epoch; if we are now
+       * outside the range, then this means that there are no previous data
+       * that we need to collect. if not, then we should move backwards. */
+      dso::seconds neg_interval =
+          dso::seconds(sp3_->interval().as_underlying_type() * -1);
+      auto tleft = t_[0].add_seconds(neg_interval);
+
       if (t.diff<dso::DateTimeDifferenceType::FractionalSeconds>(tleft)
               .seconds() > WINDOW_SEC) {
+        printf("t.diff<dso::DateTimeDifferenceType::FractionalSeconds>(tleft)."
+               "seconds() > WINDOW_SEC [2]");
         /* we seem to be ok on the left! let's do the same on the right */
         const int right_idx = pts_ - 1;
         auto tright = t_[right_idx].add_seconds<dso::nanoseconds>(
             dso::nanoseconds(sp3_->interval()));
         if (tright.diff<dso::DateTimeDifferenceType::FractionalSeconds>(t)
                 .seconds() > WINDOW_SEC) {
+          printf("tright.diff<dso::DateTimeDifferenceType::FractionalSeconds>("
+                 "t).seconds() > WINDOW_SEC [3]");
           /* we are ok! collecting one more data point would be outside range
            * !*/
           return HUNT_DIRECTION::OK;
         } else {
+          printf("else [3]");
           /* we should collect at least one more data point on the right! */
           return HUNT_DIRECTION::FORWARD;
         }
       } else {
+        printf("else [2]");
         return HUNT_DIRECTION::BACK;
       }
     }
@@ -111,12 +125,12 @@ private:
   }
 
   int initial_feed(const dso::datetime<dso::nanoseconds> &t) noexcept {
+    printf("calling initial_feed() ...\n");
     pts_ = 0;
     const auto stop_t =
         t.add_seconds<dso::seconds>(dso::seconds((WINDOW_SEC) * -1));
-    while (it_ != sp3_->end()) {
-      if (t < stop_t.add_seconds(dso::seconds(1)))
-        ++it_;
+    while ((it_ != sp3_->end()) && (it_->t() < stop_t)) {
+      ++it_;
     }
 
     if (it_ == sp3_->end()) {
@@ -127,7 +141,7 @@ private:
               dso::to_char<dso::YMDFormat::YYYYMMDD, dso::HMSFormat::HHMMSSF>(
                   t, buf),
               __func__);
-      return -1;
+      return 1;
     }
 
     while (it_ != sp3_->end()) {
@@ -140,7 +154,20 @@ private:
         break;
       ++it_;
     }
-    return 0;
+    printf("exiting initial_feed() ...\n");
+    {
+      char buf[64];
+      printf("[");
+      for (int i = 0; i < pts_; i++) {
+        printf("%s, ",
+               dso::to_char<dso::YMDFormat::YYYYMMDD, dso::HMSFormat::HHMMSSF>(
+                   t_[i], buf));
+      }
+      printf("]\n");
+    }
+
+    /* pts_ should not be 0 */
+    return (!pts_);
   }
 
   [[nodiscard]]
@@ -156,7 +183,10 @@ private:
       return get_range(t);
     }
     case HUNT_DIRECTION::BACK: {
-      it_ = sp3_->begin();
+      it_.try_rewind();
+      int error = initial_feed(t);
+      if (error)
+        return error;
       return get_range(t);
     }
     case HUNT_DIRECTION::ERROR:
