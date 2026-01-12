@@ -131,33 +131,41 @@ int dso::Sp3c::get_next_block(
   // keep on reading records .....
   dso::sp3_details::SatelliteId satid;
   dso::Sp3Flag flag;
-  double arr[8];
+  double arr[8], sarr[8];
   int error = 0;
 
   while (istream_.getline(line, MAX_RECORD_CHARS) && (!error)) {
     /* position line */
     if (line[0] == 'P') {
       /* consume position line; resolve it (if sats match) */
-      error = get_next_position(line, satid, arr, arr + 4, flag, sat);
+      error = get_next_position(line, satid, arr, sarr, flag, sat);
       if (!error) {
         auto it = datablock.sat_block(satid);
         if (it == datablock.blocks_.end()) {
-          /* entry for new satellite */
-          datablock.blocks_.emplace_back(satid, flag, arr, arr + 4);
+          /* entry for new satellite (mark absent velocity for now) */
+          flag.set(dso::Sp3Event::bad_abscent_velocity |
+                   dso::Sp3Event::bad_abscent_clock_rate);
+          datablock.blocks_.emplace_back(satid, flag, arr, sarr);
         } else {
-          it->update_position(flag, arr, arr + 4);
+          it->flag.clear(dso::Sp3Event::bad_abscent_position);
+          it->flag.clear(dso::Sp3Event::bad_abscent_clock);
+          it->update_position(flag, arr, sarr);
         }
         datablock.t_ = t;
       }
     } else if (line[0] == 'V') {
-      error = get_next_velocity(line, satid, arr, arr + 4, flag, sat);
+      error = get_next_velocity(line, satid, arr + 4, sarr + 4, flag, sat);
       if (!error) {
         auto it = datablock.sat_block(satid);
         if (it == datablock.blocks_.end()) {
-          /* entry for new satellite */
-          datablock.blocks_.emplace_back(satid, flag, arr, arr + 4);
+          /* entry for new satellite (mark absent position for now) */
+          flag.set(dso::Sp3Event::bad_abscent_position |
+                   dso::Sp3Event::bad_abscent_clock);
+          datablock.blocks_.emplace_back(satid, flag, arr, sarr);
         } else {
-          it->update_velocity(flag, arr, arr + 4);
+          it->flag.clear(dso::Sp3Event::bad_abscent_velocity);
+          it->flag.clear(dso::Sp3Event::bad_abscent_clock_rate);
+          it->update_velocity(flag, arr + 4, sarr + 4);
         }
         datablock.t_ = t;
       }

@@ -33,26 +33,6 @@ struct SatelliteId {
       set_id(str);
   }
 
-  /* copy constructor */
-  SatelliteId(const SatelliteId &s) noexcept { this->set_id(s.id); }
-
-  /* move constructor */
-  SatelliteId(SatelliteId &&s) noexcept { this->set_id(s.id); }
-
-  /* assignment operator */
-  SatelliteId &operator=(const SatelliteId &s) noexcept {
-    if (this != &s)
-      this->set_id(s.id);
-    return *this;
-  }
-
-  /* move assignment operator */
-  SatelliteId &operator=(SatelliteId &&s) noexcept {
-    if (this != &s)
-      this->set_id(s.id);
-    return *this;
-  }
-
   /** @brief Set id from a c-string.
    * This will only copy the first SAT_ID_CHARS (from the input string) to
    * the instance's id
@@ -75,5 +55,8 @@ struct SatelliteId {
   }
 };
 
-} // namespace dso::sp3_details
+/* we need atelliteId to be trivially_copy_assignable */
+static_assert(std::is_trivially_copy_assignable_v<SatelliteId>);
+
+} /* namespace dso::sp3_details */
 #endif

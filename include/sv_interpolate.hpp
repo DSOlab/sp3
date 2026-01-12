@@ -5,6 +5,7 @@
 #include "sp3.hpp"
 #include <cassert>
 #include <stdexcept>
+#include <utility> // std::declval
 #ifdef DEBUG
 #include <chrono>
 #endif
@@ -23,7 +24,10 @@ private:
   sp3_details::SatelliteId svid_;
   /** Sp3 instance providing data values */
   Sp3c *sp3_{nullptr};
-  Sp3c::iterator it_;
+  /* Sp3c::iterator it_; this will not compile, iterator is private within Sp3
+   */
+  using iterator_t = decltype(std::declval<Sp3c &>().begin());
+  iterator_t it_;
   /* epochs (corresponding to data_) */
   dso::datetime<dso::nanoseconds> *t_;
   /* data */
@@ -145,14 +149,16 @@ private:
     switch (direction) {
     case HUNT_DIRECTION::OK:
       return 0;
-    case HUNT_DIRECTION::FORWARD:
+    case HUNT_DIRECTION::FORWARD: {
       int error = feed();
       if (error)
         return error;
       return get_range(t);
-    case HUNT_DIRECTION::BACK:
+    }
+    case HUNT_DIRECTION::BACK: {
       it_ = sp3_->begin();
       return get_range(t);
+    }
     case HUNT_DIRECTION::ERROR:
       return 1;
     }

@@ -93,6 +93,11 @@ struct Sp3SvDataBlock {
   }
 }; /* struct Sp3SvDataBlock */
 
+/* wee need Sp3SvDataBlock to be trivially_copy_assignable (we'll be sopying
+ * using memmove)*/
+static_assert(
+    std::is_trivially_copy_assignable_v<dso::sp3_details::Sp3SvDataBlock>);
+
 struct Sp3DataBlock {
   dso::datetime<dso::nanoseconds> t_{dso::datetime<dso::nanoseconds>::min()};
   std::vector<Sp3SvDataBlock> blocks_;
@@ -292,11 +297,9 @@ private:
     pointer operator->() const noexcept { return &current_; }
 
     iterator &operator++() {
-      printf("[debug] calling operator++() ...\n");
       if (!sp3_)
         return *this;
       int error = sp3_->get_next_block(current_, nullptr);
-      printf("[debug] operator++(): get_next_block return %d...\n", error);
       if (error) {
         sp3_->referenced_by_iterator('\0');
         sp3_ = nullptr;
@@ -326,9 +329,7 @@ private:
         sp3_->referenced_by_iterator('\0');
     }
 
-  private:
     explicit iterator(Sp3c &sp3) : current_{}, sp3_(&sp3) {
-      printf("[debug] creating new Sp3::iterator instance ...\n");
       if (sp3_->referenced_by_iterator()) {
         throw std::runtime_error(
             "[ERROR] Cannot construct an iterator to Sp3 instance (" +
@@ -341,7 +342,6 @@ private:
       sp3_->referenced_by_iterator('1');
       sp3_->rewind();
       this->operator++();
-      printf("[debug] all done creating instance ...\n");
     }
 
     iterator(const iterator &) = delete;
@@ -363,6 +363,7 @@ private:
       return *this;
     }
 
+  private:
     value_type current_;
     Sp3c *sp3_;
 

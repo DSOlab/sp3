@@ -7,6 +7,7 @@
 #define __SP3C_IGS_FLAGS__
 
 #include "sp3_flag_details.hpp"
+#include <type_traits>
 
 namespace dso {
 
@@ -65,6 +66,9 @@ struct Sp3Flag {
   /** @brief Set to reasonable default values */
   void set_defaults() noexcept;
 }; /* struct Sp3Flag */
+
+/* we need Sp3Flag to be trivially_copy_assignable */
+static_assert(std::is_trivially_copy_assignable_v<Sp3Flag>);
 
 } /* namespace dso */
 
