@@ -118,8 +118,6 @@ int dso::Sp3c::read_header() noexcept {
     return 5;
   }
   interval_ = dso::nanoseconds(static_cast<long>(sec * 1e9));
-  printf("%s -> intrval in nanosec = %ld\n", __func__,
-         interval_.as_underlying_type());
 
   int mjd = std::strtol(line + 39, &str_end, 10);
   if (!mjd || errno == ERANGE) {

@@ -20,6 +20,7 @@ int barycentric_interpolation(const datetime<nanoseconds> &t,
 
 template <int WINDOW_SEC, int MIN_PTS> class Sp3ForwardInterpolator {
 private:
+  using IntType = dso::nanoseconds::underlying_type;
   /** SV to interpolate */
   sp3_details::SatelliteId svid_;
   /** Sp3 instance providing data values */
@@ -48,17 +49,20 @@ private:
   }
 
   std::size_t buffer_pts() const noexcept {
-    const int interval = sp3_->interval().as_underlying_type();
-    std::size_t wnpts = WINDOW_SEC / interval + 1;
-    printf("Calling buffer_pts() = %d / %d + 1\n", WINDOW_SEC, interval);
+    const IntType interval = sp3_->interval().as_underlying_type();
+    const IntType window =
+        dso::nanoseconds(dso::cast_to<dso::seconds, dso::nanoseconds>(
+                             dso::seconds(WINDOW_SEC)))
+            .as_underlying_type();
+    std::size_t wnpts = window / interval + 1;
     return 2 * wnpts;
   }
 
   int allocate() noexcept {
     const auto N = buffer_pts();
-    printf("Allocating %ld entries at startup\n", N);
     data_ = new sp3_details::Sp3SvDataBlock[N];
     t_ = new dso::datetime<dso::nanoseconds>[N];
+    buffer_pts_ = N;
     return (data_ != nullptr && t_ != nullptr);
   }
 
@@ -74,7 +78,6 @@ private:
       return HUNT_DIRECTION::BACK;
     }
     if (t_[0] < t) {
-      printf("t_[0] < t [1]");
       /* subtract one 'interval' from the begining epoch; if we are now
        * outside the range, then this means that there are no previous data
        * that we need to collect. if not, then we should move backwards. */
@@ -84,26 +87,20 @@ private:
 
       if (t.diff<dso::DateTimeDifferenceType::FractionalSeconds>(tleft)
               .seconds() > WINDOW_SEC) {
-        printf("t.diff<dso::DateTimeDifferenceType::FractionalSeconds>(tleft)."
-               "seconds() > WINDOW_SEC [2]");
         /* we seem to be ok on the left! let's do the same on the right */
         const int right_idx = pts_ - 1;
         auto tright = t_[right_idx].add_seconds<dso::nanoseconds>(
             dso::nanoseconds(sp3_->interval()));
         if (tright.diff<dso::DateTimeDifferenceType::FractionalSeconds>(t)
                 .seconds() > WINDOW_SEC) {
-          printf("tright.diff<dso::DateTimeDifferenceType::FractionalSeconds>("
-                 "t).seconds() > WINDOW_SEC [3]");
           /* we are ok! collecting one more data point would be outside range
            * !*/
           return HUNT_DIRECTION::OK;
         } else {
-          printf("else [3]");
           /* we should collect at least one more data point on the right! */
           return HUNT_DIRECTION::FORWARD;
         }
       } else {
-        printf("else [2]");
         return HUNT_DIRECTION::BACK;
       }
     }
@@ -125,7 +122,6 @@ private:
   }
 
   int initial_feed(const dso::datetime<dso::nanoseconds> &t) noexcept {
-    printf("calling initial_feed() ...\n");
     pts_ = 0;
     const auto stop_t =
         t.add_seconds<dso::seconds>(dso::seconds((WINDOW_SEC) * -1));
@@ -154,18 +150,6 @@ private:
         break;
       ++it_;
     }
-    printf("exiting initial_feed() ...\n");
-    {
-      char buf[64];
-      printf("[");
-      for (int i = 0; i < pts_; i++) {
-        printf("%s, ",
-               dso::to_char<dso::YMDFormat::YYYYMMDD, dso::HMSFormat::HHMMSSF>(
-                   t_[i], buf));
-      }
-      printf("]\n");
-    }
-
     /* pts_ should not be 0 */
     return (!pts_);
   }
